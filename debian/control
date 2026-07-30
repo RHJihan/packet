@@ -1,0 +1,46 @@
+Source: packet
+Section: net
+Priority: optional
+Maintainer: Rifat Hasan Jihan <rjihan@users.noreply.github.com>
+Rules-Requires-Root: no
+Standards-Version: 4.7.0
+Homepage: https://github.com/nozwock/packet
+Build-Depends:
+ debhelper-compat (= 13),
+ meson (>= 0.59),
+ ninja-build,
+ pkgconf,
+ libglib2.0-dev (>= 2.66),
+ libgtk-4-dev (>= 4.0.0),
+ libadwaita-1-dev,
+ desktop-file-utils,
+ appstream,
+# data/resources/meson.build compiles ui/*.blp with blueprint-compiler.
+# dh_auto_configure runs meson with --wrap-mode=nodownload, so the
+# subprojects/blueprint-compiler.wrap fallback is unavailable and the
+# program has to come from the archive (trixie ships 0.16.0).
+ blueprint-compiler (>= 0.16.0),
+ gettext,
+ protobuf-compiler,
+# libdbus-sys (via rqs_lib -> bluer/btleplug) links the system libdbus and
+# needs dbus-1.pc at build time.
+ libdbus-1-dev,
+ libssl-dev,
+# The Rust toolchain (rustc + cargo) is intentionally NOT listed here.
+# The CI workflow installs it via rustup so the compiler is not limited to
+# whatever version Debian ships; dpkg-checkbuilddeps would fail on an apt
+# "cargo" dependency that is satisfied out-of-band. If you build locally
+# with Trixie's own toolchain, "apt install cargo" first.
+
+Package: packet
+Architecture: any
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+Description: Quick Share client for Linux (GNOME)
+ Packet lets you share files wirelessly with Android devices and other
+ computers using the Quick Share protocol. It integrates with the GNOME
+ desktop and is built with GTK4 and libadwaita.
+ .
+ This is an unofficial package built from a personal fork for
+ Debian 13 (trixie).

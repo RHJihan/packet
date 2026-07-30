@@ -1,0 +1,322 @@
+# =============================================================================
+# Release (.deb) - manually triggered workflow for a personal fork of Packet
+#
+# What it does:
+#   1. Builds Packet inside a genuine Debian 13 (trixie) container so the
+#      resulting .deb links against the exact glibc/GTK4/libadwaita versions
+#      shipped by Trixie (GNOME 48). Building on the stock Ubuntu runner
+#      would produce a binary linked against Ubuntu's library versions,
+#      which may not install or run cleanly on Debian 13.
+#   2. Packages it with dpkg-buildpackage + debhelper using the debian/
+#      directory committed in this repo. debhelper drives the existing
+#      Meson build system directly and computes runtime dependencies
+#      automatically (dh_shlibdeps), which is what makes the package
+#      "install cleanly" on a fresh Trixie system.
+#   3. Smoke-tests the package by actually installing it in the container.
+#   4. Creates a GitHub Release with an auto- or user-supplied version tag,
+#      auto-generated release notes, the .deb, a SHA256SUMS file, and the
+#      .buildinfo/.changes metadata for reproducibility auditing.
+#
+# How to use:
+#   Actions -> "Release (.deb)" -> Run workflow.
+#   Leave "version" empty to use the version from meson.build, or type one
+#   (e.g. 0.6.2) to override. The tag v<version> must not already exist.
+# =============================================================================
+
+name: Release (.deb)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Release version, e.g. 0.6.2 (without the leading "v").
+          Leave empty to use the project version from meson.build.
+        required: false
+        type: string
+      prerelease:
+        description: Mark the GitHub Release as a pre-release
+        required: false
+        type: boolean
+        default: false
+
+# The GITHUB_TOKEN needs write access to repository contents in order to
+# create the tag and the Release. Everything else stays at the default
+# read-only level (principle of least privilege).
+permissions:
+  contents: write
+
+# Prevent two release runs from racing each other (e.g. double-clicking
+# "Run workflow"). New runs wait instead of cancelling an in-flight build,
+# because a half-published release is worse than a queued one.
+concurrency:
+  group: release-deb
+  cancel-in-progress: false
+
+env:
+  # Rust toolchain used for the build. "stable" tracks the latest stable
+  # release. If you ever want bit-for-bit reproducible rebuilds of an old
+  # release, pin this to a specific version like "1.88.0" - that plus the
+  # committed Cargo.lock and the Trixie package snapshot in the .buildinfo
+  # file is what makes a rebuild consistent.
+  RUST_TOOLCHAIN: stable
+
+jobs:
+  build:
+    name: Build .deb on Debian 13 (trixie)
+    runs-on: ubuntu-latest
+    # Safety guard: this workflow is meant for a personal fork only.
+    # It refuses to run if it somehow ends up enabled on the upstream repo.
+    if: github.repository != 'nozwock/packet'
+    # The job's steps all execute inside this container, on top of the
+    # Ubuntu runner. "debian:trixie" is the official Debian 13 image, so
+    # apt installs the same library versions your target system has.
+    container:
+      image: debian:trixie
+    outputs:
+      # Passed to the release job so both jobs agree on the tag name.
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # -----------------------------------------------------------------
+      # 1. Build dependencies.
+      # Installed before checkout because actions/checkout prefers git,
+      # and a bare debian image ships without git or CA certificates.
+      #
+      #   build-essential, debhelper, dpkg-dev  -> Debian packaging toolchain
+      #   meson, ninja-build, pkgconf           -> Packet's build system
+      #   libglib2.0-dev, libgtk-4-dev,
+      #   libadwaita-1-dev                      -> GUI toolkit headers
+      #   desktop-file-utils, appstream,
+      #   gettext                               -> validation + translations,
+      #                                            required by data/ and po/
+      #   blueprint-compiler                    -> compiles data/resources/ui
+      #                                            *.blp files. Must be a real
+      #                                            package: dh_auto_configure
+      #                                            passes --wrap-mode=nodownload,
+      #                                            so meson cannot fall back to
+      #                                            the subprojects/ wrap.
+      #   protobuf-compiler                     -> protoc, needed at build
+      #                                            time by the Quick Share
+      #                                            protocol crates
+      #   libdbus-1-dev                         -> dbus-1.pc for libdbus-sys,
+      #                                            pulled in by rqs_lib via
+      #                                            bluer/btleplug for BLE
+      #   libssl-dev                            -> TLS headers for crates
+      #                                            that link system OpenSSL
+      #   lintian                               -> package QA linter
+      # -----------------------------------------------------------------
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git \
+            build-essential debhelper dpkg-dev lintian \
+            meson ninja-build pkgconf \
+            libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
+            desktop-file-utils appstream gettext blueprint-compiler \
+            protobuf-compiler libdbus-1-dev libssl-dev
+
+      # -----------------------------------------------------------------
+      # 2. Check out the fork. actions/checkout is the official action.
+      # Default shallow clone is fine: release notes are generated
+      # server-side by GitHub, so no local history is needed.
+      # -----------------------------------------------------------------
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 3. Rust toolchain via rustup rather than apt. Trixie's packaged
+      # rustc can lag behind what Packet's crate graph requires; rustup
+      # stable avoids chasing MSRV breakage. Pin RUST_TOOLCHAIN above if
+      # you want a frozen compiler for reproducibility.
+      # -----------------------------------------------------------------
+      - name: Install Rust toolchain
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}"
+          # debhelper 13 overrides HOME with a temp dir during the
+          # dh_auto_* steps. rustup's rustc/cargo shims resolve the
+          # toolchain via $HOME/.rustup unless RUSTUP_HOME is set, so
+          # without these exports meson's rustc detection fails with
+          # "rustup could not choose a version of rustc to run".
+          # Pinning RUSTUP_HOME (plus the toolchain name) makes
+          # resolution independent of whatever HOME the build sets.
+          {
+            echo "RUSTUP_HOME=${HOME}/.rustup"
+            echo "RUSTUP_TOOLCHAIN=${RUST_TOOLCHAIN}"
+          } >> "$GITHUB_ENV"
+          # Make cargo visible to later steps (meson does find_program('cargo')).
+          echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+
+      # -----------------------------------------------------------------
+      # 4. Resolve the release version.
+      #    - If the workflow input is set, use it (leading "v" stripped).
+      #    - Otherwise parse the project version from meson.build.
+      #    Then validate the format and fail early if the tag already
+      #    exists, so a typo cannot clobber or duplicate a release.
+      # -----------------------------------------------------------------
+      - name: Determine release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            VERSION="${INPUT_VERSION#v}"
+            echo "Using version from workflow input: ${VERSION}"
+          else
+            # Matches the project() version line; dependency version
+            # constraints like '>= 2.66' cannot match because the pattern
+            # requires digits immediately after the opening quote.
+            VERSION="$(grep -oPm1 "version:\s*'\K[0-9]+(\.[0-9]+)+" meson.build)"
+            echo "Using version from meson.build: ${VERSION}"
+          fi
+
+          if [[ ! "${VERSION}" =~ ^[0-9]+(\.[0-9]+)+([~+.][A-Za-z0-9.~+]+)?$ ]]; then
+            echo "::error::'${VERSION}' is not a valid Debian upstream version."
+            exit 1
+          fi
+
+          if git ls-remote --exit-code origin "refs/tags/v${VERSION}" > /dev/null 2>&1; then
+            echo "::error::Tag v${VERSION} already exists. Bump the version or delete the old tag/release first."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------
+      # 5. Generate debian/changelog for this build. The version in the
+      # changelog is what dpkg-buildpackage stamps into the .deb, so it is
+      # written here rather than hand-maintained. A "native" version (no
+      # Debian revision) keeps the filename clean: packet_<version>_amd64.deb
+      # -----------------------------------------------------------------
+      - name: Generate debian/changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > debian/changelog <<EOF
+          packet (${VERSION}) trixie; urgency=medium
+
+            * Automated CI build of Packet ${VERSION}.
+            * Built from commit ${GITHUB_SHA} by GitHub Actions run ${GITHUB_RUN_ID}.
+
+           -- ${GITHUB_ACTOR} <${GITHUB_ACTOR}@users.noreply.github.com>  $(date -R)
+          EOF
+          cat debian/changelog
+
+      # -----------------------------------------------------------------
+      # 6. Build the binary package.
+      #    -b   binary-only (no source package needed for a fork release)
+      #    -us -uc  do not GPG-sign; CI has no signing key
+      # debhelper (see debian/rules) configures Meson, runs ninja (which
+      # invokes cargo), installs into a staging dir, strips debug symbols,
+      # and computes the Depends: line from the linked shared libraries.
+      # Artifacts land in the parent directory, as is dpkg convention.
+      # git's ownership check is relaxed first because the checkout is
+      # owned by a different uid than the container user in some setups,
+      # and Packet's meson.build shells out to git for dev builds.
+      # -----------------------------------------------------------------
+      - name: Build Debian package
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          chmod +x debian/rules
+          dpkg-buildpackage -b -us -uc
+          mkdir -p dist
+          mv ../packet_*.deb ../packet_*.changes ../packet_*.buildinfo dist/
+          ls -l dist/
+
+      # -----------------------------------------------------------------
+      # 7. QA: lintian reports packaging issues. Informational only
+      # (|| true) so style warnings never block a personal release, but
+      # the log stays available in the run output.
+      # -----------------------------------------------------------------
+      - name: Run lintian (informational)
+        run: lintian --info dist/*.deb || true
+
+      # -----------------------------------------------------------------
+      # 8. Smoke test: install the .deb in this pristine Trixie container.
+      # apt resolves the package's Depends: from the real Trixie archive,
+      # which proves the package installs cleanly on Debian 13. Then a
+      # couple of sanity checks on the installed files.
+      # -----------------------------------------------------------------
+      - name: Install test on clean Debian 13
+        run: |
+          set -euo pipefail
+          apt-get install -y ./dist/packet_*.deb
+          dpkg -s packet
+          command -v packet
+          test -f /usr/share/applications/io.github.nozwock.Packet.desktop
+          echo "Package installed cleanly on trixie."
+
+      # -----------------------------------------------------------------
+      # 9. Checksums so users can verify their download.
+      # -----------------------------------------------------------------
+      - name: Generate SHA256 checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      # -----------------------------------------------------------------
+      # 10. Hand everything to the release job. Official upload/download
+      # artifact actions are the supported way to pass files across jobs.
+      # -----------------------------------------------------------------
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packet-deb-${{ steps.version.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+  # =====================================================================
+  # Release job runs on the plain runner (not the container) because the
+  # GitHub CLI is preinstalled there. Splitting build and publish also
+  # means a failed upload can be retried without rebuilding.
+  # =====================================================================
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: packet-deb-${{ needs.build.outputs.version }}
+          path: dist
+
+      # gh release create:
+      #   - creates the tag v<version> pointing at the exact commit this
+      #     workflow ran against (--target), so the tag always matches
+      #     what was built
+      #   - --generate-notes produces release notes from the commits/PRs
+      #     since the previous tag, server-side
+      #   - all files in dist/ are attached as release assets
+      # gh is GitHub's official CLI and authenticates with the built-in
+      # GITHUB_TOKEN; no personal access token is needed.
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=(
+            "v${VERSION}"
+            --repo "${GITHUB_REPOSITORY}"
+            --target "${GITHUB_SHA}"
+            --title "Packet v${VERSION}"
+            --generate-notes
+          )
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            args+=( --prerelease )
+          fi
+          gh release create "${args[@]}" dist/*
+          echo "Release v${VERSION} published: https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}"

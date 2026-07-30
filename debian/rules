@@ -1,0 +1,42 @@
+#!/usr/bin/make -f
+# debian/rules for packet - debhelper drives the upstream Meson build.
+#
+# "dh" is a sequencer: it runs the standard packaging steps in order
+# (configure -> build -> test -> install -> strip -> compute deps -> build
+# .deb). Because the buildsystem is meson, dh_auto_* map directly onto
+# meson setup / ninja / meson install with DESTDIR, so we do not duplicate
+# any upstream build logic here.
+
+# Enable all standard Debian hardening compiler/linker flags for the C bits.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# Meson's src/meson.build pins CARGO_HOME inside the build directory, so
+# cargo's registry cache stays contained in the package build tree. This
+# export is a belt-and-braces fallback for any direct cargo invocations.
+export CARGO_HOME = $(CURDIR)/debian/cargo_home
+
+%:
+	dh $@ --buildsystem=meson
+
+# Build the release profile explicitly. Packet's "development" profile
+# appends a git hash suffix and a Devel app id; releases must use the
+# plain io.github.nozwock.Packet id.
+#
+# apply.sh runs first: it rewrites the few upstream files that assume a
+# newer GNOME than Debian ships. Keeping that out of the checked-out tree is
+# what lets "Sync fork" on github.com merge upstream without conflicts. See
+# the comments in debian/gnome-compat/apply.sh.
+override_dh_auto_configure:
+	sh debian/gnome-compat/apply.sh
+	dh_auto_configure -- -Dprofile=default
+
+# Skip the test suite during packaging. Upstream's meson test target can
+# invoke cargo test, which redownloads dev-dependencies and roughly doubles
+# CI time without changing the artifact. Run tests in a separate CI job if
+# you want them gating releases.
+override_dh_auto_test:
+
+# dwz (DWARF compressor) frequently chokes on Rust-generated debug info
+# and its savings are irrelevant here since dh_strip removes the debug
+# sections from the shipped binary anyway.
+override_dh_dwz:
