@@ -3,7 +3,7 @@
   <id>@app-id@</id>
   <metadata_license>CC0</metadata_license>
   <project_license>GPL-3.0+</project_license>
-  <name>Packet</name>
+  <name>Quick Share</name>
   <summary>Share files easily</summary>
   <description>
     <!-- Translators: The metainfo strings are for Flathub and aren't a priority -->
