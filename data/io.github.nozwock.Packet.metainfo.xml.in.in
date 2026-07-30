@@ -3,12 +3,12 @@
   <id>@app-id@</id>
   <metadata_license>CC0</metadata_license>
   <project_license>GPL-3.0+</project_license>
-  <name>Packet</name>
+  <name>Quick Share</name>
   <summary>Share files easily</summary>
   <description>
     <!-- Trasnlators: The metainfo strings are for Flathub and aren't a priority -->
-    <p>Send and receive files wirelessly with Android devices using Quick Share or another device with Packet installed.</p>
-    <p>Packet requires Bluetooth to be enabled and the devices to be connected to a Wi-Fi network with mDNS.</p>
+    <p>Send and receive files wirelessly with Android devices using Quick Share or another device with this app installed.</p>
+    <p>Quick Share requires Bluetooth to be enabled and the devices to be connected to a Wi-Fi network with mDNS.</p>
   </description>
 
   <screenshots>

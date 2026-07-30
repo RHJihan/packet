@@ -644,7 +644,7 @@ impl PacketApplicationWindow {
 
                             if is_run_in_background && !is_run_in_background_allowed {
                                 imp.obj()
-                                    .add_toast(&gettext("Packet cannot run in the background"));
+                                    .add_toast(&gettext("Quick Share cannot run in the background"));
                             }
                         }
 
@@ -680,7 +680,7 @@ impl PacketApplicationWindow {
                                 .unwrap_or_default();
 
                             if is_auto_start && !is_auto_start_allowed {
-                                imp.obj().add_toast(&gettext("Packet cannot run at login"));
+                                imp.obj().add_toast(&gettext("Quick Share cannot run at login"));
                             }
                         }
 
@@ -974,7 +974,7 @@ impl PacketApplicationWindow {
             .auto_start(self.imp().settings.boolean("auto-start"))
             .command(["packet", "--background"])
             .dbus_activatable(false)
-            .reason(gettext("Packet wants to run in the background").as_str())
+            .reason(gettext("Quick Share wants to run in the background").as_str())
             .send()
             .await
             .and_then(|it| it.response());
@@ -1033,7 +1033,7 @@ impl PacketApplicationWindow {
                         }
                     }
                 } else {
-                    this.add_toast(&gettext("Packet cannot run in the background"));
+                    this.add_toast(&gettext("Quick Share cannot run in the background"));
                 }
             }
         ));
@@ -1266,7 +1266,7 @@ impl PacketApplicationWindow {
             .wrap(true)
             .label(&gettext(
                 "Plugin installation failed. Make sure the following directory \
-                exists and is accessible by Packet:",
+                exists and is accessible by Quick Share:",
             ))
             .build();
         info_box.append(&info_label);
