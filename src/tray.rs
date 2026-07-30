@@ -33,7 +33,7 @@ impl ksni::Tray for Tray {
             .into()
     }
     fn title(&self) -> String {
-        gettext("Packet")
+        gettext("Quick Share")
     }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;

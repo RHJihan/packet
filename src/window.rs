@@ -673,7 +673,7 @@ impl PacketApplicationWindow {
 
                             if is_run_in_background && !is_run_in_background_allowed {
                                 imp.obj()
-                                    .add_toast_msg(&gettext("Packet cannot run in the background"));
+                                    .add_toast_msg(&gettext("Quick Share cannot run in the background"));
                             }
                         }
 
@@ -1309,7 +1309,7 @@ impl PacketApplicationWindow {
             .wrap(true)
             .label(&gettext(
                 "Plugin installation failed. Make sure the following directory \
-                exists and is accessible by Packet:",
+                exists and is accessible by Quick Share:",
             ))
             .build();
         info_box.append(&info_label);
