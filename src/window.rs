@@ -24,7 +24,9 @@ use crate::ext::MessageExt;
 use crate::objects::{self, SendRequestState};
 use crate::objects::{TransferState, UserAction};
 use crate::plugins::{FileBasedPlugin, NautilusPlugin, Plugin};
-use crate::utils::{strip_user_home_prefix, with_signals_blocked, xdg_download_with_fallback};
+use crate::utils::{
+    is_url, strip_user_home_prefix, with_signals_blocked, xdg_download_with_fallback,
+};
 use crate::{monitors, tokio_runtime, widgets};
 
 #[derive(Debug)]
@@ -93,6 +95,8 @@ mod imp {
         pub bottom_bar_status: TemplateChild<gtk::Box>,
         #[template_child]
         pub bottom_bar_status_top: TemplateChild<gtk::Box>,
+        #[template_child]
+        pub bottom_bar_send_button: TemplateChild<gtk::Button>,
 
         #[template_child]
         pub device_name_entry: TemplateChild<adw::EntryRow>,
@@ -123,9 +127,24 @@ mod imp {
         #[template_child]
         pub main_box: TemplateChild<gtk::Box>,
         #[template_child]
+        pub main_nav_page: TemplateChild<adw::NavigationPage>,
+        #[template_child]
         pub main_nav_content: TemplateChild<adw::StatusPage>,
         #[template_child]
         pub main_add_files_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub main_share_text_button: TemplateChild<gtk::Button>,
+
+        #[template_child]
+        pub paste_text_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub clear_text_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub share_text_view: TemplateChild<gtk::TextView>,
+        #[template_child]
+        pub share_text_counter: TemplateChild<gtk::Label>,
+
+        pub send_text: RefCell<Option<(String, rqs_lib::TextPayloadType)>>,
 
         #[template_child]
         pub manage_files_nav_content: TemplateChild<gtk::Box>,
@@ -133,8 +152,6 @@ mod imp {
         pub manage_files_header: TemplateChild<adw::PreferencesGroup>,
         #[template_child]
         pub manage_files_add_files_button: TemplateChild<gtk::Button>,
-        #[template_child]
-        pub manage_files_send_button: TemplateChild<gtk::Button>,
         #[template_child]
         pub manage_files_listbox: TemplateChild<gtk::ListBox>,
         #[default(gio::ListStore::new::<gio::File>())]
@@ -169,7 +186,7 @@ mod imp {
 
         // RQS State
         pub rqs: Arc<Mutex<Option<rqs_lib::RQS>>>,
-        pub file_sender: Arc<Mutex<Option<tokio::sync::mpsc::Sender<rqs_lib::SendInfo>>>>,
+        pub payload_sender: Arc<Mutex<Option<tokio::sync::mpsc::Sender<rqs_lib::SendInfo>>>>,
         pub ble_receiver: Arc<Mutex<Option<tokio::sync::broadcast::Receiver<()>>>>,
         pub mdns_discovery_broadcast_tx:
             Arc<Mutex<Option<tokio::sync::broadcast::Sender<rqs_lib::EndpointInfo>>>>,
@@ -330,6 +347,8 @@ glib::wrapper! {
 }
 
 impl PacketApplicationWindow {
+    pub const MAX_TEXT_PAYLOAD_CHARS: i32 = 100_000;
+
     pub fn new(app: &PacketApplication) -> Self {
         glib::Object::builder().property("application", app).build()
     }
@@ -1182,6 +1201,7 @@ impl PacketApplicationWindow {
         self.setup_main_page();
         self.setup_manage_files_page();
         self.setup_recipient_page();
+        self.setup_share_text_page();
     }
 
     fn present_plugin_success_dialog(&self) {
@@ -1422,6 +1442,59 @@ impl PacketApplicationWindow {
                 false
             }
         ));
+
+        // Ctrl+V on main page
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(clone!(
+            #[weak]
+            imp,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, key, _, modifier| {
+                let is_ctrl_v = (key == gdk::Key::v || key == gdk::Key::V)
+                    && modifier.contains(gdk::ModifierType::CONTROL_MASK)
+                    && !modifier.contains(gdk::ModifierType::ALT_MASK);
+
+                if !is_ctrl_v {
+                    return glib::Propagation::Proceed;
+                }
+
+                let clipboard = imp.obj().clipboard();
+                glib::spawn_future_local(clone!(
+                    #[weak]
+                    imp,
+                    async move {
+                        let formats = clipboard.formats();
+                        if (formats.contains_type(gdk::FileList::static_type())
+                            || formats.contain_mime_type("text/uri-list")
+                            || formats.contain_mime_type("x-special/gnome-copied-files"))
+                            && let Ok(value) = clipboard
+                                .read_value_future(
+                                    gdk::FileList::static_type(),
+                                    glib::Priority::default(),
+                                )
+                                .await
+                            && let Ok(file_list) = value.get::<gdk::FileList>()
+                        {
+                            imp.manage_files_model.remove_all();
+                            imp.obj().handle_added_files_to_send(
+                                &imp.manage_files_model,
+                                file_list.files(),
+                            );
+                        } else if let Some(text) = clipboard.read_text_future().await.ok().flatten()
+                            && !text.is_empty()
+                        {
+                            imp.share_text_view.buffer().set_text(&text);
+                            imp.main_nav_view.push_by_tag("share_text_nav_page");
+                            imp.share_text_view.grab_focus();
+                        }
+                    }
+                ));
+
+                return glib::Propagation::Stop;
+            }
+        ));
+        imp.main_nav_page.add_controller(key_controller);
     }
 
     fn setup_manage_files_page(&self) {
@@ -1434,10 +1507,27 @@ impl PacketApplicationWindow {
                 imp.obj().add_files_via_dialog();
             }
         ));
-        imp.manage_files_send_button.connect_clicked(clone!(
+        imp.bottom_bar_send_button.connect_clicked(clone!(
             #[weak]
             imp,
             move |_| {
+                if let Some(tag) = imp.main_nav_view.visible_page_tag()
+                    && tag == "share_text_nav_page"
+                {
+                    let buffer = imp.share_text_view.buffer();
+                    let text = buffer
+                        .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                        .to_string();
+
+                    let text_type = if is_url(&text) {
+                        rqs_lib::TextPayloadType::Url
+                    } else {
+                        rqs_lib::TextPayloadType::Text
+                    };
+
+                    *imp.send_text.borrow_mut() = Some((text, text_type));
+                }
+
                 imp.obj().present_recipients_dialog();
             }
         ));
@@ -1496,6 +1586,7 @@ impl PacketApplicationWindow {
             move |_| {
                 imp.is_recipients_dialog_opened.set(false);
                 imp.obj().stop_mdns_discovery();
+                *imp.send_text.borrow_mut() = None;
             }
         ));
     }
@@ -1638,6 +1729,99 @@ impl PacketApplicationWindow {
         }
     }
 
+    fn setup_share_text_page(&self) {
+        let imp = self.imp();
+
+        imp.main_share_text_button.connect_clicked(clone!(
+            #[weak]
+            imp,
+            move |_| {
+                // Invoke callback on changed event to refresh state
+                imp.share_text_view
+                    .buffer()
+                    .emit_by_name::<()>("changed", &[]);
+
+                imp.main_nav_view.push_by_tag("share_text_nav_page");
+                imp.share_text_view.grab_focus();
+            }
+        ));
+
+        imp.paste_text_button.connect_clicked(clone!(
+            #[weak]
+            imp,
+            move |_| {
+                let clipboard = imp.obj().clipboard();
+                glib::spawn_future_local(clone!(
+                    #[weak]
+                    imp,
+                    async move {
+                        if let Some(text) = clipboard.read_text_future().await.ok().flatten() {
+                            imp.share_text_view.buffer().set_text(&text);
+                        }
+                    }
+                ));
+            }
+        ));
+
+        imp.clear_text_button.connect_clicked(clone!(
+            #[weak]
+            imp,
+            move |_| {
+                imp.share_text_view.buffer().set_text("");
+                imp.share_text_view.grab_focus();
+            }
+        ));
+
+        // TextView buffer validation
+        imp.share_text_view.buffer().connect_changed(clone!(
+            #[weak]
+            imp,
+            move |buffer| {
+                let char_count = buffer.char_count();
+                let is_valid = char_count > 0 && char_count <= Self::MAX_TEXT_PAYLOAD_CHARS;
+
+                imp.clear_text_button.set_sensitive(char_count > 0);
+                if let Some(tag) = imp.main_nav_view.visible_page_tag()
+                    && tag == "share_text_nav_page"
+                {
+                    imp.bottom_bar_send_button.set_sensitive(is_valid);
+                }
+                imp.share_text_counter.set_label(&format!(
+                    "{} / {}",
+                    char_count,
+                    Self::MAX_TEXT_PAYLOAD_CHARS
+                ));
+
+                if char_count > Self::MAX_TEXT_PAYLOAD_CHARS {
+                    imp.share_text_counter.add_css_class("error");
+                } else {
+                    imp.share_text_counter.remove_css_class("error");
+                }
+            }
+        ));
+
+        // Ctrl+Return
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(clone!(
+            #[weak]
+            imp,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, key, _, modifier| {
+                if (key == gdk::Key::Return || key == gdk::Key::KP_Enter)
+                    && modifier.contains(gdk::ModifierType::CONTROL_MASK)
+                {
+                    if imp.bottom_bar_send_button.is_sensitive() {
+                        imp.bottom_bar_send_button.emit_clicked();
+                        return glib::Propagation::Stop;
+                    }
+                }
+                glib::Propagation::Proceed
+            }
+        ));
+        imp.share_text_view.add_controller(key_controller);
+    }
+
     fn bottom_bar_status_indicator_ui_update(&self, is_visible: bool) {
         let imp = self.imp();
 
@@ -1695,24 +1879,41 @@ impl PacketApplicationWindow {
             #[weak]
             imp,
             move |obj| {
-                if let Some(tag) = obj.visible_page_tag() {
-                    match tag.as_str() {
-                        "manage_files_nav_page" => {
-                            imp.bottom_bar_status.set_halign(gtk::Align::Start);
-                            imp.bottom_bar_status_top.set_halign(gtk::Align::Start);
-                            imp.bottom_bar_caption.set_xalign(0.);
-                            imp.bottom_bar_spacer.set_visible(true);
-                            imp.manage_files_send_button.set_visible(true);
-                        }
-                        _ => {
-                            imp.bottom_bar_status.set_halign(gtk::Align::Center);
-                            imp.bottom_bar_status_top.set_halign(gtk::Align::Center);
-                            imp.bottom_bar_caption.set_xalign(0.5);
-                            imp.bottom_bar_spacer.set_visible(false);
-                            imp.manage_files_send_button.set_visible(false);
-                        }
+                let Some(tag) = obj.visible_page_tag() else {
+                    return;
+                };
+
+                match tag.as_str() {
+                    "manage_files_nav_page" | "share_text_nav_page" => {
+                        imp.bottom_bar_status.set_halign(gtk::Align::Start);
+                        imp.bottom_bar_status_top.set_halign(gtk::Align::Start);
+                        imp.bottom_bar_caption.set_xalign(0.);
+                        imp.bottom_bar_spacer.set_visible(true);
+
+                        imp.bottom_bar_send_button.set_visible(true);
+                    }
+                    _ => {
+                        imp.bottom_bar_status.set_halign(gtk::Align::Center);
+                        imp.bottom_bar_status_top.set_halign(gtk::Align::Center);
+                        imp.bottom_bar_caption.set_xalign(0.5);
+                        imp.bottom_bar_spacer.set_visible(false);
+
+                        imp.bottom_bar_send_button.set_visible(false);
                     }
                 }
+
+                match tag.as_str() {
+                    "manage_files_nav_page" => {
+                        imp.bottom_bar_send_button.set_sensitive(true);
+                    }
+                    "share_text_nav_page" => {
+                        let char_count = imp.share_text_view.buffer().char_count();
+                        let is_valid = char_count > 0 && char_count <= Self::MAX_TEXT_PAYLOAD_CHARS;
+
+                        imp.bottom_bar_send_button.set_sensitive(is_valid);
+                    }
+                    _ => {}
+                };
             }
         ));
 
@@ -2290,8 +2491,8 @@ impl PacketApplicationWindow {
                     *imp.mdns_discovery_broadcast_tx.lock().await =
                         Some(mdns_discovery_broadcast_tx);
 
-                    let (file_sender, ble_receiver) = run_result?;
-                    *imp.file_sender.lock().await = Some(file_sender);
+                    let (payload_sender, ble_receiver) = run_result?;
+                    *imp.payload_sender.lock().await = Some(payload_sender);
                     *imp.ble_receiver.lock().await = Some(ble_receiver);
 
                     imp.root_stack.get().set_visible_child_name("main_page");

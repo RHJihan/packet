@@ -171,7 +171,7 @@ template $PacketApplicationWindow: Adw.ApplicationWindow {
                                     hexpand: true;
                                 }
 
-                                Button manage_files_send_button {
+                                Button bottom_bar_send_button {
                                     label: _("Send To…");
                                     visible: false;
                                     halign: center;
@@ -194,7 +194,7 @@ template $PacketApplicationWindow: Adw.ApplicationWindow {
                         vexpand: true;
 
                         Adw.NavigationView main_nav_view {
-                            Adw.NavigationPage {
+                            Adw.NavigationPage main_nav_page {
                                 title: _("Main Page");
                                 tag: "main_nav_page";
 
@@ -223,16 +223,28 @@ template $PacketApplicationWindow: Adw.ApplicationWindow {
                                             "icon-dropshadow",
                                         ]
 
-                                        child: Button main_add_files_button {
-                                            label: _("Add Files");
-                                            margin-top: 24;
+                                        child: Box {
+                                            orientation: vertical;
+                                            spacing: 12;
                                             halign: center;
 
-                                            styles [
-                                                "pill",
-                                                "suggested-action",
-                                                "accent",
-                                            ]
+                                            Button main_add_files_button {
+                                                label: _("Add Files");
+
+                                                styles [
+                                                    "pill",
+                                                    "suggested-action",
+                                                    "accent",
+                                                ]
+                                            }
+
+                                            Button main_share_text_button {
+                                                label: _("Share Text");
+
+                                                styles [
+                                                    "pill",
+                                                ]
+                                            }
                                         };
                                     }
                                 };
@@ -294,6 +306,130 @@ template $PacketApplicationWindow: Adw.ApplicationWindow {
 
                                                         styles [
                                                             "boxed-list",
+                                                        ]
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                };
+                            }
+
+                            Adw.NavigationPage {
+                                title: _("Share Text");
+                                tag: "share_text_nav_page";
+
+                                child: Adw.ToolbarView {
+                                    [top]
+                                    Adw.HeaderBar {
+                                        show-title: false;
+
+                                        [end]
+                                        MenuButton {
+                                            icon-name: "open-menu-symbolic";
+                                            menu-model: primary_menu;
+                                            tooltip-text: _("Main Menu");
+                                            primary: true;
+                                        }
+                                    }
+
+                                    Box {
+                                        orientation: vertical;
+                                        hexpand: true;
+                                        vexpand: true;
+
+                                        ScrolledWindow {
+                                            hscrollbar-policy: never;
+                                            vexpand: true;
+                                            hexpand: true;
+
+                                            Adw.Clamp {
+                                                maximum-size: 550;
+
+                                                Box {
+                                                    orientation: vertical;
+                                                    margin-top: 24;
+                                                    margin-bottom: 24;
+                                                    margin-start: 24;
+                                                    margin-end: 24;
+                                                    spacing: 12;
+
+                                                    Box {
+                                                        orientation: vertical;
+
+                                                        styles [
+                                                            "card",
+                                                        ]
+
+                                                        Frame {
+                                                            margin-top: 6;
+                                                            margin-start: 6;
+                                                            margin-end: 6;
+
+                                                            ScrolledWindow {
+                                                                min-content-height: 220;
+                                                                vexpand: true;
+                                                                hscrollbar-policy: never;
+
+                                                                TextView share_text_view {
+                                                                    top-margin: 14;
+                                                                    bottom-margin: 14;
+                                                                    left-margin: 14;
+                                                                    right-margin: 14;
+                                                                    wrap-mode: word_char;
+                                                                    accepts-tab: false;
+                                                                }
+                                                            }
+                                                        }
+
+                                                        Box {
+                                                            margin-top: 6;
+                                                            margin-bottom: 6;
+                                                            margin-start: 12;
+                                                            margin-end: 12;
+                                                            spacing: 6;
+
+                                                            Button paste_text_button {
+                                                                icon-name: "edit-paste-symbolic";
+                                                                tooltip-text: _("Paste from clipboard");
+
+                                                                styles [
+                                                                    "flat",
+                                                                ]
+                                                            }
+
+                                                            Button clear_text_button {
+                                                                icon-name: "edit-clear-symbolic";
+                                                                tooltip-text: _("Clear text");
+                                                                sensitive: false;
+
+                                                                styles [
+                                                                    "flat",
+                                                                ]
+                                                            }
+
+                                                            Adw.Bin {
+                                                                hexpand: true;
+                                                            }
+
+                                                            Label share_text_counter {
+                                                                valign: center;
+
+                                                                styles [
+                                                                    "caption",
+                                                                    "dim-label",
+                                                                ]
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Label {
+                                                        label: _("Enter or paste text, or links to send");
+                                                        halign: center;
+
+                                                        styles [
+                                                            "caption",
+                                                            "dim-label",
                                                         ]
                                                     }
                                                 }
