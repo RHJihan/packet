@@ -103,20 +103,15 @@ clamp_gate adw v1_ "$adw_version" no
 # --------------------------------------------------------------------------
 if dpkg --compare-versions "$adw_version" ge 1.8; then
 	say "libadwaita $adw_version has AdwShortcutsDialog, keeping upstream UI"
-elif [ ! -f data/resources/ui/shortcuts-dialog.blp ]; then
+elif [ ! -f src/shortcuts-dialog.blp ]; then
 	say "no shortcuts-dialog.blp in tree, nothing to swap"
 else
-	cp debian/gnome-compat/shortcuts.blp data/resources/ui/shortcuts.blp
-	rm data/resources/ui/shortcuts-dialog.blp
+	cp debian/gnome-compat/shortcuts.blp src/shortcuts-dialog.blp
 
-	subst data/resources/meson.build \
-		's|ui/shortcuts-dialog\.blp|ui/shortcuts.blp|'
-	subst data/resources/resources.gresource.xml \
-		's|alias="shortcuts-dialog\.ui">ui/shortcuts-dialog\.ui|alias="gtk/help-overlay.ui">ui/shortcuts.ui|'
-	subst data/resources/ui/window.blp \
+	subst src/ui-resources.gresource.xml.in \
+		's|<file compressed="true" preprocess="xml-stripblanks">shortcuts-dialog\.ui</file>|<file compressed="true" preprocess="xml-stripblanks" alias="gtk/help-overlay.ui">shortcuts-dialog.ui</file>|'
+	subst src/window.blp \
 		's|"app\.shortcuts"|"win.show-help-overlay"|'
-	subst po/POTFILES.in \
-		's|ui/shortcuts-dialog\.blp|ui/shortcuts.blp|'
 
 	say "swapped AdwShortcutsDialog UI for the GtkShortcutsWindow one"
 fi

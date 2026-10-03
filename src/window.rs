@@ -664,7 +664,7 @@ impl Window {
                                 add_toast(
                                     imp.preferences_dialog.upcast_ref(),
                                     adw::Toast::new(&gettext(
-                                        "Packet cannot run in the background",
+                                        "Quick Share cannot run in the background",
                                     )),
                                 );
                             }
@@ -704,7 +704,7 @@ impl Window {
                             if is_auto_start && !is_auto_start_allowed {
                                 add_toast(
                                     imp.preferences_dialog.upcast_ref(),
-                                    adw::Toast::new(&gettext("Packet cannot run at login")),
+                                    adw::Toast::new(&gettext("Quick Share cannot run at login")),
                                 );
                             }
                         }
@@ -1307,7 +1307,7 @@ impl Window {
             .wrap(true)
             .label(&gettext(
                 "Plugin installation failed. Make sure the following directory \
-                exists and is accessible by Packet:",
+                exists and is accessible by Quick Share:",
             ))
             .build();
         info_box.append(&info_label);

@@ -117,7 +117,7 @@ class PacketMenuProvider(GObject.GObject, Nautilus.MenuProvider):
 
         item = Nautilus.MenuItem(
             name=f"{PacketMenuProvider.__name__}::SendFiles",
-            label=_("Send with Packet"),
+            label=_("Send with Quick Share"),
         )
 
         item.connect("activate", self.on_menu_item_activate, files)

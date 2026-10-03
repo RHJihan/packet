@@ -238,7 +238,7 @@ impl Application {
         let dialog = adw::AboutDialog::builder()
             .application_name(gettext(
                 // Translators: The name should remain untranslated
-                "Packet",
+                "Quick Share",
             ))
             .application_icon(APP_ID)
             .version(VERSION)
